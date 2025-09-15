@@ -158,6 +158,22 @@
             margin-bottom: 16px;
         }
 
+        .expand-toggle {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            color: white;
+            padding: 4px 8px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-left: auto;
+        }
+
+        .expand-toggle:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
         .section-header h2 {
             font-size: 1.25rem;
             font-weight: bold;
@@ -181,9 +197,62 @@
             background: rgba(255, 255, 255, 0.1);
             border-radius: 6px;
             padding: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .player-card:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .player-card.collapsed:hover .player-card-content {
+            max-height: 200px !important;
+            padding-top: 1.5px !important;
+        }
+
+        .player-card.collapsed:hover .expand-icon {
+            transform: rotate(180deg);
+        }
+
+        .player-card-header {
             display: flex;
             justify-content: space-between;
-            align-items: start;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .player-card-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out, padding-top 0.3s ease-out;
+            padding-top: 0;
+        }
+
+        .player-card-content.expanded {
+            max-height: 200px;
+            padding-top: 1.5px;
+        }
+
+        .player-card.collapsed .player-card-content {
+            max-height: 0 !important;
+            padding-top: 0 !important;
+        }
+
+        .player-card.collapsed:not(:hover) .player-card-content {
+            max-height: 0 !important;
+            padding-top: 0 !important;
+        }
+
+        .expand-icon {
+            font-size: 0.8rem;
+            transition: transform 0.3s ease;
+            opacity: 0.6;
+            flex-shrink: 0;
+            margin-left: 4px;
+        }
+
+        .player-card.expanded .expand-icon {
+            transform: rotate(180deg);
         }
 
         .player-info {
@@ -208,6 +277,8 @@
 
         .player-points {
             text-align: right;
+            flex-shrink: 0;
+            min-width: 60px;
         }
 
         .points-value {
@@ -1429,15 +1500,36 @@
                         ${iconSvg}
                         <h2>${title}</h2>
                         <span class="player-count">${sortedPlayers.length} players</span>
+                        <button class="expand-toggle" onclick="toggleAllCards(this, '${className}')">
+                            🔽 Expand All
+                        </button>
                     </div>
                     <div class="players-list">
             `;
 
             sortedPlayers.forEach(player => {
                 html += `
-                    <div class="player-card" title="Player ID: ${player.id}">
-                        <div class="player-info">
-                            <div class="player-name">${player.name || `Player ${player.id}`}</div>
+                    <div class="player-card collapsed" onclick="togglePlayerCard(this)" title="Hover to preview or click to pin open">
+                        <div class="player-card-header">
+                            <div class="player-info">
+                                <div class="player-name">${player.name || `Player ${player.id}`}</div>
+                            </div>
+                            <div class="player-points">
+                                <div class="points-value">${(() => {
+                                    if (selectedWeek < currentWeek || (selectedWeek === currentWeek && player.actualPoints > 0)) {
+                                        return (player.actualPoints || 0).toFixed(1);
+                                    } else {
+                                        return (player.projectedPoints || player.points || 0).toFixed(1);
+                                    }
+                                })()}</div>
+                                <div class="points-label">
+                                    ${selectedWeek > currentWeek ? 'proj' :
+                                      selectedWeek === currentWeek && (player.actualPoints === 0 || !player.actualPoints) && player.projectedPoints > 0 ? 'proj' : 'pts'}
+                                </div>
+                            </div>
+                            <span class="expand-icon">▼</span>
+                        </div>
+                        <div class="player-card-content">
                             <div class="player-details">
                                 ${player.position || 'N/A'} - ${player.team}
                                 ${player.status ? ` (${player.status})` : ''}
@@ -1446,7 +1538,7 @@
                                 ${player.matchup || 'Bye Week'}
                             </div>
                             <div class="player-leagues">
-                                Net Impact: ${player.netImpact > 0 ? '+' : ''}${player.netImpact} 
+                                Net Impact: ${player.netImpact > 0 ? '+' : ''}${player.netImpact}
                                 (Own: ${player.ownedCount}, Face: ${player.opponentCount})
                             </div>
                             <div class="player-leagues" style="font-size: 0.7rem; margin-top: 2px;">
@@ -1454,24 +1546,11 @@
                                 ${player.ownedCount > 0 && player.opponentCount > 0 ? ' | ' : ''}
                                 ${player.opponentCount > 0 ? `Face in: ${player.opponentLeagues.join(', ')}` : ''}
                             </div>
+                            ${selectedWeek === currentWeek && player.actualPoints > 0 && player.projectedPoints > 0 ?
+                                `<div style="font-size: 0.7rem; opacity: 0.6; margin-top: 2px;">proj: ${player.projectedPoints.toFixed(1)}</div>` : ''}
                             <div style="font-size: 0.65rem; opacity: 0.5; margin-top: 2px; font-family: monospace;">
                                 ID: ${player.id}
                             </div>
-                        </div>
-                        <div class="player-points">
-                            <div class="points-value">${(() => {
-                                if (selectedWeek < currentWeek || (selectedWeek === currentWeek && player.actualPoints > 0)) {
-                                    return (player.actualPoints || 0).toFixed(1);
-                                } else {
-                                    return (player.projectedPoints || player.points || 0).toFixed(1);
-                                }
-                            })()}</div>
-                            <div class="points-label">
-                                ${selectedWeek > currentWeek ? 'proj' :
-                                  selectedWeek === currentWeek && (player.actualPoints === 0 || !player.actualPoints) && player.projectedPoints > 0 ? 'proj' : 'pts'}
-                            </div>
-                            ${selectedWeek === currentWeek && player.actualPoints > 0 && player.projectedPoints > 0 ?
-                                `<div style="font-size: 0.7rem; opacity: 0.6; margin-top: 2px;">proj: ${player.projectedPoints.toFixed(1)}</div>` : ''}
                         </div>
                     </div>
                 `;
@@ -2186,6 +2265,43 @@
             while (existingList.children.length > 50) {
                 existingList.removeChild(existingList.lastChild);
             }
+        }
+
+        function togglePlayerCard(cardElement) {
+            const content = cardElement.querySelector('.player-card-content');
+            const isCollapsed = cardElement.classList.contains('collapsed');
+
+            if (isCollapsed) {
+                cardElement.classList.remove('collapsed');
+                cardElement.classList.add('expanded');
+                content.classList.add('expanded');
+            } else {
+                cardElement.classList.add('collapsed');
+                cardElement.classList.remove('expanded');
+                content.classList.remove('expanded');
+            }
+        }
+
+        function toggleAllCards(buttonElement, sectionClass) {
+            const section = buttonElement.closest('.player-section');
+            const cards = section.querySelectorAll('.player-card');
+            const isExpandingAll = buttonElement.textContent.includes('Expand');
+
+            cards.forEach(card => {
+                const content = card.querySelector('.player-card-content');
+
+                if (isExpandingAll) {
+                    card.classList.remove('collapsed');
+                    card.classList.add('expanded');
+                    content.classList.add('expanded');
+                } else {
+                    card.classList.add('collapsed');
+                    card.classList.remove('expanded');
+                    content.classList.remove('expanded');
+                }
+            });
+
+            buttonElement.textContent = isExpandingAll ? '🔼 Collapse All' : '🔽 Expand All';
         }
 
         function renderLiveFeed() {
