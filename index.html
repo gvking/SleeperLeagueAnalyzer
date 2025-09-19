@@ -899,9 +899,155 @@
             }
         }
         
+        async function cleanupOldScheduleCache() {
+            try {
+                const keys = Object.keys(localStorage);
+                const scheduleKeys = keys.filter(key => key.startsWith('nfl_schedule_'));
+
+                scheduleKeys.forEach(key => {
+                    try {
+                        const data = JSON.parse(localStorage.getItem(key));
+                        // Remove cache older than 7 days or from previous seasons
+                        if (!data.timestamp ||
+                            Date.now() - data.timestamp > 7 * 24 * 60 * 60 * 1000 ||
+                            !key.includes(currentSeason)) {
+                            localStorage.removeItem(key);
+                        }
+                    } catch (e) {
+                        localStorage.removeItem(key); // Remove corrupted cache
+                    }
+                });
+            } catch (error) {
+                console.warn('Error cleaning schedule cache:', error);
+            }
+        }
+
+        async function getCachedSchedule(season) {
+            try {
+                const cacheKey = `nfl_schedule_${season}`;
+                const cached = localStorage.getItem(cacheKey);
+                if (cached) {
+                    const data = JSON.parse(cached);
+                    if (data.timestamp && Date.now() - data.timestamp < 90 * 24 * 60 * 60 * 1000) { // 3 months
+                        return data.schedule;
+                    }
+                }
+            } catch (error) {
+                console.warn('Error reading cached schedule:', error);
+            }
+            return null;
+        }
+
+        async function cacheSchedule(season, scheduleData) {
+            try {
+                const cacheKey = `nfl_schedule_${season}`;
+                const data = {
+                    schedule: scheduleData,
+                    timestamp: Date.now()
+                };
+                localStorage.setItem(cacheKey, JSON.stringify(data));
+            } catch (error) {
+                console.warn('Error caching schedule:', error);
+            }
+        }
+
+        async function fetchWeekSchedule(week) {
+            if (nflSchedule[week]) {
+                return; // Already loaded
+            }
+
+            // Check if we have this week in cache
+            const cachedSchedule = await getCachedSchedule(currentSeason);
+            if (cachedSchedule && cachedSchedule[week]) {
+                nflSchedule[week] = cachedSchedule[week];
+                console.log(`Week ${week} schedule loaded from cache`);
+                return;
+            }
+
+            try {
+                const response = await fetch(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=${currentSeason}&seasontype=2&week=${week}`);
+                const data = await response.json();
+
+                if (data.events && data.events.length > 0) {
+                    nflSchedule[week] = {};
+
+                    data.events.forEach(game => {
+                        if (game.competitions && game.competitions[0] && game.competitions[0].competitors) {
+                            const competitors = game.competitions[0].competitors;
+                            const homeTeam = competitors.find(c => c.homeAway === 'home');
+                            const awayTeam = competitors.find(c => c.homeAway === 'away');
+
+                            if (homeTeam && awayTeam) {
+                                const homeAbbr = homeTeam.team.abbreviation;
+                                const awayAbbr = awayTeam.team.abbreviation;
+
+                                nflSchedule[week][homeAbbr] = {
+                                    opponent: awayAbbr,
+                                    isHome: true
+                                };
+                                nflSchedule[week][awayAbbr] = {
+                                    opponent: homeAbbr,
+                                    isHome: false
+                                };
+                            }
+                        }
+                    });
+                    console.log(`Week ${week} schedule loaded from ESPN API`);
+
+                    // Update cache with new data (throttled)
+                    if (!fetchWeekSchedule.lastCacheUpdate || Date.now() - fetchWeekSchedule.lastCacheUpdate > 5000) {
+                        await cacheSchedule(currentSeason, nflSchedule);
+                        fetchWeekSchedule.lastCacheUpdate = Date.now();
+                    }
+                } else {
+                    // No games this week, mark as empty
+                    nflSchedule[week] = {};
+                }
+            } catch (error) {
+                console.warn(`Error fetching week ${week} schedule:`, error);
+                nflSchedule[week] = {}; // Mark as attempted
+            }
+        }
+
         async function fetchNFLSchedule() {
+            try {
+                // Clean up old cache entries
+                await cleanupOldScheduleCache();
+
+                // Load cached schedule first
+                const cachedSchedule = await getCachedSchedule(currentSeason);
+                if (cachedSchedule) {
+                    nflSchedule = { ...cachedSchedule };
+                    console.log('Schedule loaded from cache');
+                }
+
+                // Only fetch current week initially for immediate use
+                if (!nflSchedule[currentWeek]) {
+                    await fetchWeekSchedule(currentWeek);
+                }
+
+                // Preload adjacent weeks in background (non-blocking)
+                setTimeout(async () => {
+                    const adjacentWeeks = [
+                        Math.max(1, currentWeek - 1),
+                        Math.min(18, currentWeek + 1)
+                    ].filter(week => !nflSchedule[week]);
+
+                    for (const week of adjacentWeeks) {
+                        await fetchWeekSchedule(week);
+                    }
+                }, 100);
+
+                console.log('Initial NFL schedule loaded');
+                return;
+
+            } catch (error) {
+                console.error('Error fetching NFL schedule from ESPN API:', error);
+            }
+
+            // Fallback to hardcoded schedule if ESPN API fails
             const hardcodedSchedule = {
-                1: { 
+                1: {
                     'KC': { opponent: 'BAL', isHome: true }, 'BAL': { opponent: 'KC', isHome: false },
                     'LAR': { opponent: 'DET', isHome: true }, 'DET': { opponent: 'LAR', isHome: false },
                     'PHI': { opponent: 'GB', isHome: true }, 'GB': { opponent: 'PHI', isHome: false },
@@ -938,15 +1084,43 @@
                     'LAR': { opponent: 'ARI', isHome: true }, 'ARI': { opponent: 'LAR', isHome: false }
                 }
             };
-            
+
             nflSchedule = hardcodedSchedule;
+            console.log('Using fallback hardcoded schedule');
         }
         
-        function getPlayerMatchup(playerTeam, week) {
+        async function preloadWeeksAround(targetWeek) {
+            const weeksToPreload = [
+                Math.max(1, targetWeek - 1),
+                targetWeek,
+                Math.min(18, targetWeek + 1)
+            ].filter(week => !nflSchedule[week]);
+
+            if (weeksToPreload.length > 0) {
+                setTimeout(async () => {
+                    for (const week of weeksToPreload) {
+                        await fetchWeekSchedule(week);
+                    }
+                }, 50);
+            }
+        }
+
+        async function getPlayerMatchup(playerTeam, week) {
+            // Fetch schedule for this week if not already loaded
+            if (!nflSchedule[week]) {
+                await fetchWeekSchedule(week);
+                // Preload adjacent weeks in background
+                preloadWeeksAround(week);
+            }
+
             if (!nflSchedule[week] || !nflSchedule[week][playerTeam]) {
+                // Check if this is a known bye week (week exists but team isn't in it)
+                if (nflSchedule[week] && Object.keys(nflSchedule[week]).length > 0) {
+                    return 'Bye Week';
+                }
                 return null;
             }
-            
+
             const matchup = nflSchedule[week][playerTeam];
             const vs = matchup.isHome ? 'vs' : '@';
             return `${playerTeam} ${vs} ${matchup.opponent}`;
@@ -1322,15 +1496,15 @@
                 
                 playerStats = {};
                 
-                playerIds.forEach(playerId => {
+                for (const playerId of playerIds) {
                     const playerInfo = playerDatabase[playerId];
                     const stats = weekStats[playerId];
                     const proj = realProjections[playerId];
-                    
+
                     if (playerInfo) {
                         let actualPoints = 0;
                         let projectedPoints = 0;
-                        
+
                         if (stats) {
                             actualPoints = calculateFantasyPoints(stats, playerInfo.position);
                         }
@@ -1338,9 +1512,9 @@
                         if (proj) {
                             projectedPoints = proj.pts_ppr || proj.pts_half_ppr || proj.pts_std || 0;
                         } else {
-                            return;
+                            continue;
                         }
-                        
+
                         let displayPoints = 0;
                         if (selectedWeek > currentWeek) {
                             displayPoints = projectedPoints;
@@ -1349,8 +1523,8 @@
                         } else {
                             displayPoints = actualPoints;
                         }
-                        const matchup = getPlayerMatchup(playerInfo.team, selectedWeek);
-                        
+                        const matchup = await getPlayerMatchup(playerInfo.team, selectedWeek);
+
                         playerStats[playerId] = {
                             name: `${playerInfo.first_name} ${playerInfo.last_name}`,
                             position: playerInfo.position,
@@ -1362,7 +1536,7 @@
                             matchup: matchup
                         };
                     }
-                });
+                }
             } catch (error) {
                 console.error('Error fetching player stats:', error);
             }
@@ -1535,7 +1709,7 @@
                                 ${player.status ? ` (${player.status})` : ''}
                             </div>
                             <div class="player-matchup" style="font-size: 0.75rem; color: #94a3b8; margin-top: 2px;">
-                                ${player.matchup || 'Bye Week'}
+                                ${player.matchup || 'Schedule TBD'}
                             </div>
                             <div class="player-leagues">
                                 Net Impact: ${player.netImpact > 0 ? '+' : ''}${player.netImpact}
